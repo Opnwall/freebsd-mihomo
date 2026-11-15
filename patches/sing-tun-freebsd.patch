@@ -1401,3 +1401,33 @@ diff --git a/udp_reassembly_test.go b/udp_reassembly_test.go
 +  f.packet(parts[0]);if out:=f.packet(parts[0]);out!=nil||len(f.entries)!=0{t.Fatal("overlap accepted")}
 + }
 +}
+diff --git a/stack_mixed.go b/stack_mixed.go
+--- a/stack_mixed.go
++++ b/stack_mixed.go
+@@ -188,6 +188,8 @@
+ }
+ 
+ func (m *Mixed) processPacket(packet []byte) bool {
++ packet = m.udpFragments.packet(packet)
++ if packet == nil { return false }
+ 	var (
+ 		writeBack bool
+ 		err       error
+@@ -229,7 +231,7 @@
+ 	case header.UDPProtocolNumber:
+ 		writeBack = false
+ 		pkt := stack.NewPacketBuffer(stack.PacketBufferOptions{
+-			Payload:           buffer.MakeWithData(ipHdr),
++			Payload:           buffer.MakeWithData(append([]byte(nil), ipHdr...)),
+ 			IsForwardedPacket: true,
+ 		})
+ 		m.endpoint.InjectInbound(gHdr.IPv4ProtocolNumber, pkt)
+@@ -252,7 +254,7 @@
+ 	case header.UDPProtocolNumber:
+ 		writeBack = false
+ 		pkt := stack.NewPacketBuffer(stack.PacketBufferOptions{
+-			Payload:           buffer.MakeWithData(ipHdr),
++			Payload:           buffer.MakeWithData(append([]byte(nil), ipHdr...)),
+ 			IsForwardedPacket: true,
+ 		})
+ 		m.endpoint.InjectInbound(gHdr.IPv6ProtocolNumber, pkt)
