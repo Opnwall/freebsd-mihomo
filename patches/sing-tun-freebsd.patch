@@ -295,7 +295,7 @@ diff --git a/tun_freebsd.go b/tun_freebsd.go
 index e69de29..47c0d13 100644
 --- a/tun_freebsd.go
 +++ b/tun_freebsd.go
-@@ -0,0 +1,758 @@
+@@ -0,0 +1,769 @@
 +/* SPDX-License-Identifier: MIT
 + *
 + * Copyright (C) 2017-2023 WireGuard LLC. All Rights Reserved.
@@ -845,6 +845,17 @@ index e69de29..47c0d13 100644
 +	return nil
 +}
 +
++// IPv4 broadcast must not equal the local TUN address: FreeBSD rejects TCP
++// packets addressed to an interface broadcast address before socket delivery.
++func ipv4Broadcast(prefix netip.Prefix) [4]byte {
++	address := prefix.Masked().Addr().As4()
++	mask := net.CIDRMask(prefix.Bits(), 32)
++	for i := range address {
++		address[i] |= ^mask[i]
++	}
++	return address
++}
++
 +func setTunAddress(name string, options Options) error {
 +	if len(options.Inet4Address) > 0 {
 +		for _, address := range options.Inet4Address {
@@ -857,7 +868,7 @@ index e69de29..47c0d13 100644
 +				Dstaddr: unix.RawSockaddrInet4{
 +					Len:    unix.SizeofSockaddrInet4,
 +					Family: unix.AF_INET,
-+					Addr:   address.Addr().As4(),
++					Addr:   ipv4Broadcast(address),
 +				},
 +				Mask: unix.RawSockaddrInet4{
 +					Len:    unix.SizeofSockaddrInet4,
