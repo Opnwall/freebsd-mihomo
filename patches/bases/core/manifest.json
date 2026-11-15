@@ -1,0 +1,9 @@
+{
+  "version": "1.19.34",
+  "patch": "mihomo-freebsd.patch",
+  "patch_sha256": "1bbc3374a1c6bafcf692304b72992775789ebcffc7e23d74e079d3b186b2e285",
+  "files": {
+    "listener/config/tun.go": "4428cefc29ecabc08ea01fe5d0b6c107e6b383b95f07aad7d4f7f6dcb5116fe1",
+    "listener/sing_tun/server.go": "6aec285afd721a40a859dac8b6539c1c481d2c53c7ca33eb10e2f40eb992e7a1"
+  }
+}

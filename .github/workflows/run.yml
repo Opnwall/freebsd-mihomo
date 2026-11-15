@@ -34,6 +34,8 @@ jobs:
 
   build:
     needs: upstream
+    outputs:
+      migrated: ${{ steps.prepare.outputs.migrated }}
     if: needs.upstream.outputs.build == 'true'
     env:
       MIHOMO_VERSION: ${{ needs.upstream.outputs.version }}
@@ -45,7 +47,10 @@ jobs:
         with:
           go-version-file: .go-version
           cache: false
-      - name: Prepare pinned sources and apply FreeBSD TUN patches
+      - name: Test deterministic patch migration
+        run: python3 scripts/test-migrate-patch.py
+      - name: Prepare sources and migrate FreeBSD TUN patches if needed
+        id: prepare
         run: scripts/prepare.sh
       - uses: actions/cache@v5
         with:
@@ -68,6 +73,15 @@ jobs:
             dist/clash-meta-freebsd-amd64.xz
             dist/SHA256SUMS
             dist/build-info.txt
+          if-no-files-found: error
+
+      - name: Save migrated patch candidates
+        if: steps.prepare.outputs.migrated == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: tun-patch-update
+          include-hidden-files: true
+          path: .build/patch-update/
           if-no-files-found: error
 
   smoke:
@@ -101,10 +115,37 @@ jobs:
         with:
           name: mihomo-freebsd-amd64-tun
           path: dist
+      - name: Download tested patch migration
+        if: needs.build.outputs.migrated == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: tun-patch-update
+          path: .build/patch-update
+      - name: Save patches only after compilation and FreeBSD tests pass
+        if: needs.build.outputs.migrated == 'true'
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          git fetch origin master
+          test "$(git rev-parse origin/master)" = "$EXPECTED_SHA" || {
+            echo 'Master changed during testing; retry against the new source.' >&2
+            exit 1
+          }
+          cp .build/patch-update/patches/*.patch patches/
+          mv patches/bases .build/previous-patch-bases
+          cp -R .build/patch-update/patches/bases patches/bases
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add patches
+          git diff --cached --check
+          git commit -m "Migrate FreeBSD TUN patches for upstream ${MIHOMO_VERSION}"
+          git push origin HEAD:master
       - name: Read release version
         run: |
           source build.env
-          echo "RELEASE_TAG=v${MIHOMO_VERSION}-freebsd-amd64-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+          RELEASE_COMMIT=$(git rev-parse HEAD)
+          echo "RELEASE_COMMIT=$RELEASE_COMMIT" >> "$GITHUB_ENV"
+          echo "RELEASE_TAG=v${MIHOMO_VERSION}-freebsd-amd64-${RELEASE_COMMIT::7}" >> "$GITHUB_ENV"
       - name: Publish FreeBSD amd64 build
         env:
           GH_TOKEN: ${{ github.token }}
@@ -114,5 +155,5 @@ jobs:
             gh release upload "$RELEASE_TAG" dist/* --clobber
             gh release edit "$RELEASE_TAG" --title "mihomo ${MIHOMO_VERSION} · FreeBSD x86-64 TUN" --notes-file release-notes.md
           else
-            gh release create "$RELEASE_TAG" dist/* --target "$GITHUB_SHA" --title "mihomo ${MIHOMO_VERSION} · FreeBSD x86-64 TUN" --notes-file release-notes.md
+            gh release create "$RELEASE_TAG" dist/* --target "$RELEASE_COMMIT" --title "mihomo ${MIHOMO_VERSION} · FreeBSD x86-64 TUN" --notes-file release-notes.md
           fi
