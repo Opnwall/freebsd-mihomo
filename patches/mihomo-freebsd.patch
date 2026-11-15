@@ -1,0 +1,45 @@
+diff --git a/listener/config/tun.go b/listener/config/tun.go
+index 3cfa17a..5ff8f1b 100644
+--- a/listener/config/tun.go
++++ b/listener/config/tun.go
+@@ -25,6 +25,7 @@ type Tun struct {
+ 	Inet6Address                          []netip.Prefix `yaml:"inet6-address" json:"inet6-address,omitempty"`
+ 	IPRoute2TableIndex                    int            `yaml:"iproute2-table-index" json:"iproute2-table-index,omitempty"`
+ 	IPRoute2RuleIndex                     int            `yaml:"iproute2-rule-index" json:"iproute2-rule-index,omitempty"`
++	FIBIndex                              int            `yaml:"fib-index" json:"fib-index,omitempty"`
+ 	AutoRedirect                          bool           `yaml:"auto-redirect" json:"auto-redirect,omitempty"`
+ 	AutoRedirectInputMark                 uint32         `yaml:"auto-redirect-input-mark" json:"auto-redirect-input-mark,omitempty"`
+ 	AutoRedirectOutputMark                uint32         `yaml:"auto-redirect-output-mark" json:"auto-redirect-output-mark,omitempty"`
+@@ -141,6 +142,9 @@ func (t *Tun) Equal(other Tun) bool {
+ 	if t.IPRoute2RuleIndex != other.IPRoute2RuleIndex {
+ 		return false
+ 	}
++	if t.FIBIndex != other.FIBIndex {
++		return false
++	}
+ 	if t.AutoRedirect != other.AutoRedirect {
+ 		return false
+ 	}
+diff --git a/listener/sing_tun/server.go b/listener/sing_tun/server.go
+index 5415b25..962f336 100644
+--- a/listener/sing_tun/server.go
++++ b/listener/sing_tun/server.go
+@@ -213,6 +213,10 @@ func New(options LC.Tun, tunnel C.Tunnel, additions ...inbound.Addition) (l *Lis
+ 	if ruleIndex == 0 {
+ 		ruleIndex = tun.DefaultIPRoute2RuleIndex
+ 	}
++	fibIndex := options.FIBIndex
++	if fibIndex == 0 {
++		fibIndex = tun.DefaultFIBIndex
++	}
+ 	autoRedirectFallbackRuleIndex := options.AutoRedirectIPRoute2FallbackRuleIndex
+ 	if autoRedirectFallbackRuleIndex == 0 {
+ 		autoRedirectFallbackRuleIndex = tun.DefaultIPRoute2AutoRedirectFallbackRuleIndex
+@@ -401,6 +405,7 @@ func New(options LC.Tun, tunnel C.Tunnel, additions ...inbound.Addition) (l *Lis
+ 		IPRoute2TableIndex:                    tableIndex,
+ 		IPRoute2RuleIndex:                     ruleIndex,
+ 		IPRoute2AutoRedirectFallbackRuleIndex: autoRedirectFallbackRuleIndex,
++		FIBIndex:                              fibIndex,
+ 		AutoRedirectInputMark:                 inputMark,
+ 		AutoRedirectOutputMark:                outputMark,
+ 		Inet4LoopbackAddress:                  common.Filter(options.LoopbackAddress, netip.Addr.Is4),

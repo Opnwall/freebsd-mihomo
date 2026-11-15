@@ -1,192 +1,118 @@
-name: Build
+name: Build FreeBSD amd64 TUN
+
 on:
+  push:
+    branches: [master, 'codex/**']
+    paths-ignore: ['**/*.md']
+  pull_request:
+    branches: [master]
+    paths-ignore: ['**/*.md']
   workflow_dispatch:
   schedule:
-    - cron: "00 23 * * *"
-  push:
-    branches:
-      - master
-      - hidden
-    paths-ignore:
-      - "**/README.md"
-      - "**/template.yaml"
+    - cron: '17 * * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: freebsd-amd64-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  delete:
+  upstream:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      build: ${{ steps.check.outputs.build }}
     steps:
-      - name: Delete old workflow runs
-        uses: Mattraks/delete-workflow-runs@main
-        with:
-          retain_days: 3
-          keep_minimum_runs: 6
+      - uses: actions/checkout@v6
+      - name: Check latest upstream stable release
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/check-upstream.sh
 
   build:
+    needs: upstream
+    if: needs.upstream.outputs.build == 'true'
+    env:
+      MIHOMO_VERSION: ${{ needs.upstream.outputs.version }}
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - { goos: freebsd, goarch: riscv64 }
-          - { goos: freebsd, goarch: amd64 }
-          - { goos: freebsd, goarch: 386 }
-          - { goos: freebsd, goarch: arm, goarm: 6 }
-          - { goos: freebsd, goarch: arm, goarm: 7 }
-          - { goos: freebsd, goarch: arm64 }
-    outputs:
-      NEW: ${{ steps.check.outputs.NEW }}
-      VERSION: ${{ steps.check.outputs.VERSION }}
-
+    timeout-minutes: 30
     steps:
-      - name: Checkout the "hidden" branch
-        uses: actions/checkout@v6
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
         with:
-          ref: hidden
-
-      - name: Calculate latest version
-        run: |
-          LATEST_VERSION=$(curl -sSL https://api.github.com/repos/MetaCubeX/mihomo/releases/latest | jq -r '.tag_name' | sed 's|v||g')
-          if [ "${LATEST_VERSION}" == "null" ]; then
-            echo "wrong version"
-            exit 1
-          fi
-          echo "RELEASE_NAME=${LATEST_VERSION}-vincent" >> $GITHUB_ENV
-          echo "TAG_NAME=v${LATEST_VERSION}-vincent" >> $GITHUB_ENV
-          echo "TAGS=with_gvisor" >> $GITHUB_ENV
-          echo "VERSION=${LATEST_VERSION}" >> $GITHUB_ENV
-        shell: bash
-
-      - name: Check for new version
-        id: check
-        run: |
-          if [ -f last_version ]; then
-            LAST_VERSION=$(cat last_version)
-          else
-            LAST_VERSION="none"
-          fi
-          echo "Last version: ${LAST_VERSION}, current version: ${{ env.VERSION }}"
-          if [ "${{ env.VERSION }}" != "${LAST_VERSION}" ]; then
-            echo "${{ env.VERSION }}" > last_reF1nd_version
-            echo "NEW=true" >> $GITHUB_ENV
-            echo "NEW=true" >> $GITHUB_OUTPUT
-          else
-            echo "NEW=false" >> $GITHUB_ENV
-            echo "NEW=false" >> $GITHUB_OUTPUT
-          fi
-          echo "VERSION=${{ env.VERSION }}" >> $GITHUB_OUTPUT
-        shell: bash
-
-      - name: Download and extract source tarball files
-        if: github.event_name != 'schedule' || env.NEW == 'true'
-        run: |
-          wget https://github.com/MetaCubeX/mihomo/archive/refs/tags/v${{ env.VERSION }}.tar.gz -O mihomo-${{ env.VERSION }}.tar.gz
-          tar -xf mihomo-${{ env.VERSION }}.tar.gz && mv mihomo-${{ env.VERSION }} mihomo
-          cd mihomo
-          SING_TUN_VERSION=$(cat go.mod | grep github.com/metacubex/sing-tun | awk '{ print $2 }' | sed 's|v||g')
-          echo -e "\nreplace github.com/metacubex/sing-tun v${SING_TUN_VERSION} => ../sing-tun" >> go.mod
-          echo -e "sing-tun version: ${SING_TUN_VERSION}"
-          cd ..
-          wget https://github.com/MetaCubeX/sing-tun/archive/refs/tags/v${SING_TUN_VERSION}.tar.gz -O sing-tun-${SING_TUN_VERSION}.tar.gz
-          tar -xf sing-tun-${SING_TUN_VERSION}.tar.gz && mv sing-tun-${SING_TUN_VERSION} sing-tun
-          ls -lha
-
-      - name: Apply patches
-        if: github.event_name != 'schedule' || env.NEW == 'true'
-        run: |
-          cd mihomo
-          cp component/memory/memory_freebsd_amd64.go component/memory/memory_freebsd_riscv64.go
-          patch -p1 < ../mihomo.patch
-          cd ../sing-tun
-          patch -p1 < ../sing-tun.patch
-          cp monitor_darwin.go monitor_freebsd.go
-
-      - name: Setup go
-        if: github.event_name != 'schedule' || env.NEW == 'true'
-        uses: actions/setup-go@v6
-        with:
-          go-version: "stable"
-
-      - name: Cache go dependencies
-        if: github.event_name != 'schedule' || env.NEW == 'true'
-        uses: actions/cache@v5
+          go-version-file: .go-version
+          cache: false
+      - name: Prepare pinned sources and apply FreeBSD TUN patches
+        run: scripts/prepare.sh
+      - uses: actions/cache@v5
         with:
           path: |
             ~/go/pkg/mod
-          key: go-${{ hashFiles('**/go.sum') }}
-
-      - name: Cache go build (not arm)
-        if: matrix.goarch != 'arm' && github.event_name != 'schedule'
-        uses: actions/cache@v5
-        with:
-          path: |
             ~/.cache/go-build
-          key: go-${{ hashFiles('**/go.sum') }}-${{ matrix.goos }}-${{ matrix.goarch }}
-
-      - name: Cache go build (arm)
-        if: matrix.goarch == 'arm' && github.event_name != 'schedule'
-        uses: actions/cache@v5
+          key: freebsd-amd64-${{ runner.os }}-${{ hashFiles('.go-version', 'build.env', 'patches/**', '.build/mihomo/go.sum') }}
+      - name: Build FreeBSD x86-64 binary
+        run: scripts/build.sh
+      - name: Verify target and archive
+        run: |
+          file dist/clash-meta-freebsd-amd64 | tee dist/file.txt
+          grep -q 'ELF 64-bit.*x86-64.*FreeBSD' dist/file.txt
+          xz --test dist/clash-meta-freebsd-amd64.xz
+          (cd dist && sha256sum --check SHA256SUMS)
+      - uses: actions/upload-artifact@v4
         with:
+          name: mihomo-freebsd-amd64-tun
           path: |
-            ~/.cache/go-build
-          key: go-${{ hashFiles('**/go.sum') }}-${{ matrix.goos }}-${{ matrix.goarch }}-${{ matrix.goarm }}
+            dist/clash-meta-freebsd-amd64.xz
+            dist/SHA256SUMS
+            dist/build-info.txt
+          if-no-files-found: error
 
-      - name: Build and compress binary file
-        if: github.event_name != 'schedule' || env.NEW == 'true'
-        run: |
-          cd mihomo
-          go build -v -tags ${{ env.TAGS }} -trimpath -ldflags '-X "github.com/metacubex/mihomo/constant.Version=${{ env.RELEASE_NAME }}" -X "github.com/metacubex/mihomo/constant.BuildTime=none" -w -s -buildid=' -o mihomo
-          if [ "${{ matrix.goarch }}" == 'arm' ]; then
-            mv mihomo clash-meta-${{ matrix.goos }}-${{ matrix.goarch }}v${{ matrix.goarm }}
-            xz -v clash-meta-${{ matrix.goos }}-${{ matrix.goarch }}v${{ matrix.goarm }}
-          else
-            mv mihomo clash-meta-${{ matrix.goos }}-${{ matrix.goarch }}
-            xz -v clash-meta-${{ matrix.goos }}-${{ matrix.goarch }}
-          fi
-        env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-          GOARM: ${{ matrix.goarm }}
-          CGO_ENABLED: 0
-
-      - name: Move file to publish directory
-        if: github.event_name != 'schedule' || env.NEW == 'true'
-        run: |
-          mkdir -p publish
-          cp -v mihomo/clash-meta-* publish/
-
-      - name: Release and upload assets
-        if: github.event_name != 'schedule' || env.NEW == 'true'
-        uses: softprops/action-gh-release@v3
-        with:
-          name: ${{ env.RELEASE_NAME }}
-          tag_name: ${{ env.TAG_NAME }}
-          draft: false
-          prerelease: false
-          files: |
-            ./publish/*
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  push:
+  smoke:
+    needs: build
     runs-on: ubuntu-latest
-    if: needs.build.outputs.NEW == 'true'
-    needs:
-      - build
+    timeout-minutes: 20
     steps:
-      - name: Checkout the "hidden" branch
-        uses: actions/checkout@v6
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v4
         with:
-          ref: hidden
+          name: mihomo-freebsd-amd64-tun
+          path: dist
+      - name: Start all TUN stacks on FreeBSD amd64
+        uses: vmactions/freebsd-vm@v1
+        with:
+          release: '14.3'
+          arch: amd64
+          run: sh scripts/smoke-freebsd.sh
 
-      - name: Update last_version
+  release:
+    needs: [upstream, build, smoke]
+    env:
+      MIHOMO_VERSION: ${{ needs.upstream.outputs.version }}
+    if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v4
+        with:
+          name: mihomo-freebsd-amd64-tun
+          path: dist
+      - name: Read release version
         run: |
-          echo "${{ needs.build.outputs.VERSION }}" > last_version
-
-      - name: Push last_version to "hidden" branch
-        run: |
-          git config --local user.name "Vincent Loeng"
-          git config --local user.email "173226116+Vincent-Loeng@users.noreply.github.com"
-          git add last_version
-          git commit -m "Release ${{ needs.build.outputs.VERSION }}"
-          git push
+          source build.env
+          echo "RELEASE_TAG=v${MIHOMO_VERSION}-freebsd-amd64-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+      - name: Publish FreeBSD amd64 build
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          printf 'FreeBSD x86-64 · TUN（system / gvisor / mixed）\n\n上游：MetaCubeX/mihomo v%s\n' "$MIHOMO_VERSION" > release-notes.md
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" dist/* --clobber
+            gh release edit "$RELEASE_TAG" --title "mihomo ${MIHOMO_VERSION} · FreeBSD x86-64 TUN" --notes-file release-notes.md
+          else
+            gh release create "$RELEASE_TAG" dist/* --target "$GITHUB_SHA" --title "mihomo ${MIHOMO_VERSION} · FreeBSD x86-64 TUN" --notes-file release-notes.md
+          fi
