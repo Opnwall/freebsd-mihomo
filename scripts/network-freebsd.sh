@@ -43,7 +43,7 @@ network_check() {
   kill -STOP "$pid"
   setfib 1 python3 scripts/tun-traffic.py blocked
   kill -CONT "$pid"
-  tcpdump -n -U -i tun9 -w "$PWD/dist/network/$stack.pcap" 'tcp port 18080 or udp port 18080' > "dist/network/$stack-tcpdump.log" 2>&1 &
+  tcpdump -n -U -i tun9 -w "$PWD/dist/network/$stack.pcap" > "dist/network/$stack-tcpdump.log" 2>&1 &
   capture_pid=$!
   sleep 1
   kill -0 "$capture_pid"
@@ -66,9 +66,15 @@ network_check() {
   echo "TUN $stack IPv4/IPv6 TCP/UDP forwarding, payload integrity and negative controls passed"
 }
 network_cleanup() {
+  netstat -rn > dist/network/final-routes.txt 2>&1 || true
+  netstat -s -p tcp > dist/network/tcp-stats.txt 2>&1 || true
+  netstat -s -p ip > dist/network/ip-stats.txt 2>&1 || true
+  sockstat -46 > dist/network/sockets.txt 2>&1 || true
   if [ -n "$capture_pid" ]; then
     kill -INT "$capture_pid" 2>/dev/null || true
     wait "$capture_pid" || true
+    tcpdump -n -vv -r "dist/network/$stack.pcap" > "dist/network/$stack-packets.txt" 2>&1 || true
+    head -80 "dist/network/$stack-packets.txt" || true
   fi
   if [ -n "$fixture_pid" ]; then
     kill -TERM "$fixture_pid" 2>/dev/null || true

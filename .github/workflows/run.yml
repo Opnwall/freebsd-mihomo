@@ -100,7 +100,14 @@ jobs:
           release: '14.3'
           arch: amd64
           prepare: command -v python3 >/dev/null 2>&1 || pkg install -y python3
-          run: sh scripts/smoke-freebsd.sh
+          run: |
+            if sh scripts/smoke-freebsd.sh; then
+              echo 0 > dist/network/test-exit-status
+            else
+              echo 1 > dist/network/test-exit-status
+            fi
+      - name: Require successful TUN forwarding tests
+        run: test "$(cat dist/network/test-exit-status)" = 0
 
       - name: Save TUN traffic test evidence
         if: always()
