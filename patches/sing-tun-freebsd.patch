@@ -1378,3 +1378,26 @@ diff --git a/udp_reassembly.go b/udp_reassembly.go
 + }
 + return result
 +}
+diff --git a/udp_reassembly_test.go b/udp_reassembly_test.go
+--- /dev/null
++++ b/udp_reassembly_test.go
+@@ -0,0 +1,19 @@
++package tun
++import("bytes";"encoding/binary";"testing")
++func TestUDPReassembly(t *testing.T){
++ for _,v:=range []int{4,6}{
++  payload:=bytes.Repeat([]byte{1,2,3,4,5,6,7,8},513)
++  parts:=[][]byte{}
++  for start:=0;start<len(payload);start+=1200{
++   end:=start+1200;if end>len(payload){end=len(payload)}
++   size:=20;if v==6{size=48}
++   p:=make([]byte,size+end-start)
++   if v==4{p[0]=0x45;p[9]=17;binary.BigEndian.PutUint16(p[2:4],uint16(len(p)));flags:=uint16(start/8);if end<len(payload){flags|=0x2000};binary.BigEndian.PutUint16(p[6:8],flags)}else{p[0]=0x60;p[6]=44;p[40]=17;binary.BigEndian.PutUint16(p[4:6],uint16(len(p)-40));flags:=uint16(start);if end<len(payload){flags|=1};binary.BigEndian.PutUint16(p[42:44],flags)}
++   copy(p[size:],payload[start:end]);parts=append(parts,p)
++  }
++  var f udpFragments
++  for i:=len(parts)-1;i>=0;i--{out:=f.packet(parts[i]);if i>0&&out!=nil{t.Fatal("premature reassembly")};if i==0{header:=20;if v==6{header=40};if !bytes.Equal(out[header:],payload){t.Fatal("payload corrupted")}}}
++  if len(f.entries)!=0{t.Fatal("completed datagram retained")}
++  f.packet(parts[0]);if out:=f.packet(parts[0]);out!=nil||len(f.entries)!=0{t.Fatal("overlap accepted")}
++ }
++}
