@@ -1258,3 +1258,123 @@ index 7adc948..5487fdb 100644
  
  func (o *Options) BuildAutoRouteRanges(underNetworkExtension bool) ([]netip.Prefix, error) {
  	var routeRanges []netip.Prefix
+diff --git a/stack_system.go b/stack_system.go
+--- a/stack_system.go
++++ b/stack_system.go
+@@ -23,6 +23,7 @@
+ var ErrIncludeAllNetworks = E.New("`system` and `mixed` stack are not available when `includeAllNetworks` is enabled. See https://github.com/SagerNet/sing-tun/issues/25")
+ 
+ type System struct {
++ udpFragments udpFragments
+ 	ctx                  context.Context
+ 	tun                  Tun
+ 	tunName              string
+@@ -316,6 +317,8 @@
+ }
+ 
+ func (s *System) processPacket(packet []byte) bool {
++ packet = s.udpFragments.packet(packet)
++ if packet == nil { return false }
+ 	var (
+ 		writeBack bool
+ 		err       error
+diff --git a/udp_reassembly.go b/udp_reassembly.go
+--- /dev/null
++++ b/udp_reassembly.go
+@@ -0,0 +1,96 @@
++package tun
++
++import (
++ "encoding/binary"
++ "time"
++)
++
++// udpFragments is owned by a single stack packet loop. Limit incomplete
++// datagrams and expire them to prevent unbounded memory use from fragments.
++type udpFragments struct { entries map[string]*udpDatagram }
++type udpDatagram struct {
++ expires time.Time
++ header []byte
++ pieces map[int][]byte
++ end int
++ bytes int
++}
++
++func (f *udpFragments) packet(packet []byte) []byte {
++ if len(packet) < 20 { return packet }
++ var key string
++ var offset, headerSize, payloadEnd int
++ var more, v6 bool
++ switch packet[0] >> 4 {
++ case 4:
++  headerSize = int(packet[0]&15)*4
++  payloadEnd = int(binary.BigEndian.Uint16(packet[2:4]))
++  if headerSize < 20 || payloadEnd < headerSize || payloadEnd > len(packet) || packet[9] != 17 { return packet }
++  flags := binary.BigEndian.Uint16(packet[6:8])
++  offset, more = int(flags&0x1fff)*8, flags&0x2000 != 0
++  if offset == 0 && !more { return packet }
++  key = string(append(append([]byte{4}, packet[12:20]...), packet[4:6]...))
++ case 6:
++  if len(packet)<48 || packet[6]!=44 || packet[40]!=17 { return packet }
++  payloadEnd = 40+int(binary.BigEndian.Uint16(packet[4:6]))
++  if payloadEnd<48 || payloadEnd>len(packet) { return nil }
++  field:=binary.BigEndian.Uint16(packet[42:44])
++  offset, more = int(field&0xfff8), field&1!=0
++  headerSize, v6 = 48, true
++  key = string(append(append([]byte{6}, packet[8:40]...), packet[44:48]...))
++ default: return packet
++ }
++ payload:=packet[headerSize:payloadEnd]
++ if len(payload)==0 || (more && len(payload)%8!=0) || offset+len(payload)>65535-headerSize { return nil }
++ now:=time.Now()
++ if f.entries==nil { f.entries=make(map[string]*udpDatagram) }
++ for k,d:=range f.entries { if now.After(d.expires) { delete(f.entries,k) } }
++ d:=f.entries[key]
++ if d==nil {
++  if len(f.entries)>=64 { return nil }
++  d=&udpDatagram{expires:now.Add(15*time.Second),pieces:make(map[int][]byte),end:-1}
++  f.entries[key]=d
++ }
++ // Reject overlapping fragments, including duplicates, instead of accepting
++ // ambiguous payloads. A datagram is UDP and is not retransmitted in fragments.
++ for start,data:=range d.pieces {
++  if offset<start+len(data) && start<offset+len(payload) { delete(f.entries,key);return nil }
++ }
++ if d.end>=0 && offset+len(payload)>d.end { delete(f.entries,key);return nil }
++ if !more {
++  end:=offset+len(payload)
++  if d.end>=0 && d.end!=end { delete(f.entries,key);return nil }
++  for start,data:=range d.pieces { if start+len(data)>end { delete(f.entries,key);return nil } }
++  d.end=end
++ }
++ d.pieces[offset]=append([]byte(nil),payload...)
++ d.bytes+=len(payload)
++ if offset==0 {
++  n:=headerSize
++  if v6 { n=40 }
++  d.header=append([]byte(nil),packet[:n]...)
++ }
++ if d.end<0 || len(d.header)==0 || d.bytes!=d.end { return nil }
++ result:=make([]byte,len(d.header)+d.end)
++ copy(result,d.header)
++ pos:=0
++ for pos<d.end {
++  part,ok:=d.pieces[pos]
++  if !ok { return nil }
++  copy(result[len(d.header)+pos:],part)
++  pos+=len(part)
++ }
++ delete(f.entries,key)
++ if v6 {
++  result[6]=17
++  binary.BigEndian.PutUint16(result[4:6],uint16(d.end))
++ } else {
++  binary.BigEndian.PutUint16(result[2:4],uint16(len(result)))
++  result[6],result[7],result[10],result[11]=0,0,0,0
++  var sum uint32
++  for i:=0;i<len(d.header);i+=2 { sum+=uint32(binary.BigEndian.Uint16(result[i:i+2])) }
++  for sum>65535 { sum=(sum&65535)+(sum>>16) }
++  binary.BigEndian.PutUint16(result[10:12],^uint16(sum))
++ }
++ return result
++}
