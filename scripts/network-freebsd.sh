@@ -43,7 +43,7 @@ network_check() {
   kill -STOP "$pid"
   setfib 1 python3 scripts/tun-traffic.py blocked
   kill -CONT "$pid"
-  tcpdump -n -U -i tun9 -w "$PWD/dist/network/$stack.pcap" > "dist/network/$stack-tcpdump.log" 2>&1 &
+  tcpdump --immediate-mode -B 4096 -n -U -i tun9 -w "$PWD/dist/network/$stack.pcap" > "dist/network/$stack-tcpdump.log" 2>&1 &
   capture_pid=$!
   sleep 1
   kill -0 "$capture_pid"
