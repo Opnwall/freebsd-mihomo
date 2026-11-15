@@ -94,12 +94,23 @@ jobs:
         with:
           name: mihomo-freebsd-amd64-tun
           path: dist
-      - name: Start all TUN stacks on FreeBSD amd64
+      - name: Test real TUN IPv4/IPv6 TCP/UDP forwarding on FreeBSD amd64
         uses: vmactions/freebsd-vm@v1
         with:
           release: '14.3'
           arch: amd64
+          prepare: command -v python3 >/dev/null 2>&1 || pkg install -y python3
           run: sh scripts/smoke-freebsd.sh
+
+      - name: Save TUN traffic test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tun-network-tests
+          path: |
+            dist/network/
+            dist/smoke-*.log
+          if-no-files-found: warn
 
   release:
     needs: [upstream, build, smoke]
